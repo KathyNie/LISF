@@ -53,9 +53,6 @@ module LIS_domainMod
 !  24 Aug 2008    Sujay Kumar  Implemented halo support 
 !   3 Aug 2012    Sujay Kumar  Added support for flexible tiling
 !   3 Mar 2022    Kristi Arsenault  Added support for curvature tiles
-!  13 Aug 2023    Jules Kouatchou  Set the variables LIS_rc%procLayoutx = Pc and 
-!                                  LIS_rc%procLayouty = Pr that are needed by the 
-!                                  profiling tool. Also add profiling calls.
 ! 
   use ESMF
   use LIS_coreMod
@@ -66,7 +63,6 @@ module LIS_domainMod
   use LIS_histDataMod
   use LIS_mpiMod
   use map_utils
-  use LIS_ftimingMod
 #if (defined USE_NETCDF3 || defined USE_NETCDF4)
   use netcdf
 #endif
@@ -143,7 +139,6 @@ contains
     integer             :: patch_deltas(LIS_rc%max_model_types)
 
     TRACE_ENTER("dom_init")
-    if (LIS_rc%do_ftiming) call LIS_Ftiming_On("LIS_init/dom_init")
 !    call LIS_domain_plugin
 !    call readinput(trim(LIS_rc%lis_map_proj)//char(0))
     call readDomainInput()
@@ -368,7 +363,6 @@ contains
        call LIS_histDataInit(n,LIS_rc%ntiles(n))
 
     enddo
-    if (LIS_rc%do_ftiming) call LIS_Ftiming_Off("LIS_init/dom_init")
     TRACE_EXIT("dom_init")
 
   end subroutine LIS_domain_init
@@ -2988,7 +2982,12 @@ end subroutine LIS_quilt_b_domain
           write(unit=LIS_logunit,fmt=*) '[INFO] (',k,',',LIS_rc%gridDesc(n,k),')'
        enddo
        write(LIS_logunit,*)'[INFO] --------------------------------------------------------------'
-       
+!  For output of the grid-processor layout
+!       print*, LIS_localPet, LIS_ews_halo_ind(n,LIS_localPet+1),&
+!            LIS_ewe_halo_ind(n,LIS_localPet+1),&
+!            LIS_nss_halo_ind(n,LIS_localPet+1),&
+!            LIS_nse_halo_ind(n,LIS_localPet+1)
+
     enddo
 #endif
 
@@ -3395,9 +3394,6 @@ subroutine decompose_npes(n, gnc, gnr, ips, ipe, jps, jpe)
          second_size = gnc
          columnwise = .false.
       endif
-
-      LIS_rc%procLayoutx = Pc
-      LIS_rc%procLayouty = Pr
 
       write(LIS_logunit,*) '[INFO] producing a ', Pc, ' by ', Pr, ' layout'
 
