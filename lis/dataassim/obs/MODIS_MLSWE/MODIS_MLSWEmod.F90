@@ -1,0 +1,386 @@
+!-----------------------BEGIN NOTICE -- DO NOT EDIT-----------------------
+! NASA Goddard Space Flight Center
+! Land Information System Framework (LISF)
+! Version 7.4
+!
+! Copyright (c) 2022 United States Government as represented by the
+! Administrator of the National Aeronautics and Space Administration.
+! All Rights Reserved.
+!-------------------------END NOTICE -- DO NOT EDIT-----------------------
+!BOP
+!
+! !MODULE: MODIS_MLSWEmod
+! 
+! !DESCRIPTION: 
+!   This module contains interfaces and subroutines to
+!   handle the Margulis Western US Snow Reanalysis dataset.
+!   Available online at: https://nsidc.org/data/WUS_UCLA_SR/versions/1
+! 
+! !REVISION HISTORY: 
+!  05 Jan 2024: Sujay Kumar; Initial version
+! 
+module MODIS_MLSWEmod
+! !USES: 
+  use ESMF
+  use map_utils
+  use LIS_constantsMod, only : LIS_CONST_PATH_LEN
+
+  implicit none
+
+  PRIVATE
+
+!-----------------------------------------------------------------------------
+! !PUBLIC MEMBER FUNCTIONS:
+!-----------------------------------------------------------------------------
+  public :: MODIS_MLSWE_setup
+!-----------------------------------------------------------------------------
+! !PUBLIC TYPES:
+!-----------------------------------------------------------------------------
+  public :: MODIS_MLSWE_struc
+!EOP
+  type, public:: MODIS_MLSWE_dec
+     
+     logical                :: startMode
+     integer                :: nc     
+     integer                :: nr
+     integer                :: mi
+     integer                :: useSsdevScal
+     real                   :: dataTS
+     real                   :: ssdev_inp
+     type(proj_info)        :: proj
+     real                   :: gridDesci(50)     
+     real,    allocatable :: rlat(:)
+     real,    allocatable :: rlon(:)
+     integer, allocatable :: n11(:)
+     integer, allocatable :: n12(:)
+     integer, allocatable :: n21(:)
+     integer, allocatable :: n22(:)
+     real,    allocatable :: w11(:)
+     real,    allocatable :: w12(:)
+     real,    allocatable :: w21(:)
+     real,    allocatable :: w22(:)
+     logical              :: validDomain
+  end type MODIS_MLSWE_dec
+  
+  type(MODIS_MLSWE_dec),allocatable :: MODIS_MLSWE_struc(:)
+  
+contains
+
+!BOP
+! 
+! !ROUTINE: MODIS_MLSWE_setup
+! \label{MODIS_MLSWE_setup}
+! 
+! !INTERFACE: 
+  subroutine MODIS_MLSWE_setup(k, OBS_State, OBS_Pert_State)
+! !USES: 
+    use LIS_coreMod
+    use LIS_timeMgrMod
+    use LIS_historyMod
+    use LIS_dataAssimMod
+    use LIS_perturbMod
+    use LIS_logmod
+    use LIS_DAobservationsMod
+
+    implicit none 
+
+! !ARGUMENTS: 
+    integer                ::  k
+    type(ESMF_State)       ::  OBS_State(LIS_rc%nnest)
+    type(ESMF_State)       ::  OBS_Pert_State(LIS_rc%nnest)
+! 
+! !DESCRIPTION: 
+!   
+!   This routine completes the runtime initializations and 
+!   creation of data strctures required for handling  
+!   MODIS_MLSWE data. 
+!  
+!   The arguments are: 
+!   \begin{description}
+!    \item[OBS\_State]   observation state 
+!    \item[OBS\_Pert\_State] observation perturbations state
+!   \end{description}
+!EOP
+
+    integer                ::  n,i,t,kk,c,r
+    real, allocatable          ::  obserr(:,:)
+    integer                ::  ftn
+    integer                ::  status
+    type(ESMF_Field)       ::  obsField(LIS_rc%nnest)
+    type(ESMF_ArraySpec)   ::  intarrspec, realarrspec
+    type(ESMF_Field)       ::  pertField(LIS_rc%nnest)
+    type(ESMF_ArraySpec)   ::  pertArrSpec
+    character(len=LIS_CONST_PATH_LEN) ::  snodasobsdir
+    character*100          ::  temp
+    character*1            ::  vid(2)
+    character*40, allocatable  ::  vname(:)
+    real        , allocatable  ::  varmin(:)
+    real        , allocatable  ::  varmax(:)
+    type(pert_dec_type)    ::  obs_pert
+    real, pointer          ::  obs_temp(:,:)
+    real, allocatable          :: ssdev(:)
+    real                   :: cornerlat1, cornerlat2
+    real                   :: cornerlon1, cornerlon2
+    character*10           :: timeString
+
+    allocate(MODIS_MLSWE_struc(LIS_rc%nnest))
+
+    call ESMF_ArraySpecSet(intarrspec,rank=1,typekind=ESMF_TYPEKIND_I4,&
+         rc=status)
+    call LIS_verify(status)
+
+    call ESMF_ArraySpecSet(realarrspec,rank=1,typekind=ESMF_TYPEKIND_R4,&
+         rc=status)
+    call LIS_verify(status)
+
+    call ESMF_ArraySpecSet(pertArrSpec,rank=2,typekind=ESMF_TYPEKIND_R4,&
+         rc=status)
+    call LIS_verify(status)
+
+    call ESMF_ConfigFindLabel(LIS_config,"MODIS ML SWE data directory:",&
+         rc=status)
+    do n=1,LIS_rc%nnest
+       call ESMF_ConfigGetAttribute(LIS_config,snodasobsdir,&
+            rc=status)
+       call LIS_verify(status, 'MODIS ML SWE data directory: is missing')
+
+       call ESMF_AttributeSet(OBS_State(n),"Data Directory",&
+            snodasobsdir, rc=status)
+       call LIS_verify(status)
+    enddo
+
+    call ESMF_ConfigFindLabel(LIS_config,"MODIS ML SWE use scaled standard deviation model:",&
+         rc=status)
+    do n=1,LIS_rc%nnest
+       call ESMF_ConfigGetAttribute(LIS_config,MODIS_MLSWE_struc(n)%useSsdevScal,&
+            rc=status)
+       call LIS_verify(status, 'MODIS ML SWE use scaled standard deviation model: is missing')
+       
+    enddo
+
+    call ESMF_ConfigFindLabel(LIS_config,"MODIS ML SWE assimilation frequency:",&
+         rc=status)
+    do n=1,LIS_rc%nnest
+       call ESMF_ConfigGetAttribute(LIS_config,timeString,&
+            rc=status)
+       call LIS_verify(status, 'MODIS ML SWE assimilation frequency: is missing')
+       call LIS_parseTimeString(timeString,MODIS_MLSWE_struc(n)%dataTS)
+       
+    enddo
+    
+    do n=1,LIS_rc%nnest
+       call ESMF_AttributeSet(OBS_State(n),"Data Update Status",&
+            .false., rc=status)
+       call LIS_verify(status)
+
+       call ESMF_AttributeSet(OBS_State(n),"Data Update Time",&
+            -99.0, rc=status)
+       call LIS_verify(status)
+
+       call ESMF_AttributeSet(OBS_State(n),"Data Assimilate Status",&
+            .false., rc=status)
+       call LIS_verify(status)
+       
+       call ESMF_AttributeSet(OBS_State(n),"Number Of Observations",&
+            LIS_rc%obs_ngrid(k),rc=status)
+       call LIS_verify(status)
+       
+    enddo
+
+    write(LIS_logunit,*)'[INFO] read MODIS ML SWE data specifications'       
+
+!----------------------------------------------------------------------------
+!   Create the array containers that will contain the observations and
+!   the perturbations. MODIS_MLSWE 
+!   observations are in the grid space. Since there is only one layer
+!   being assimilated, the array size is LIS_rc%obs_ngrid(k). 
+!   
+!----------------------------------------------------------------------------
+
+    do n=1,LIS_rc%nnest
+       
+       write(unit=temp,fmt='(i2.2)') 1
+       read(unit=temp,fmt='(2a1)') vid
+
+       obsField(n) = ESMF_FieldCreate(arrayspec=realarrspec,&
+            grid=LIS_obsvecGrid(n,k),&
+            name="Observation"//vid(1)//vid(2),rc=status)
+       call LIS_verify(status)
+
+!Perturbations State
+       write(LIS_logunit,*) '[INFO] Opening attributes for observations ',&
+            trim(LIS_rc%obsattribfile(k))
+       ftn = LIS_getNextUnitNumber()
+       open(ftn,file=trim(LIS_rc%obsattribfile(k)),status='old')
+       read(ftn,*)
+       read(ftn,*) LIS_rc%nobtypes(k)
+       read(ftn,*)
+    
+       allocate(vname(LIS_rc%nobtypes(k)))
+       allocate(varmax(LIS_rc%nobtypes(k)))
+       allocate(varmin(LIS_rc%nobtypes(k)))
+       
+       do i=1,LIS_rc%nobtypes(k)
+          read(ftn,fmt='(a40)') vname(i)
+          read(ftn,*) varmin(i),varmax(i)
+          write(LIS_logunit,*) '[INFO] ',vname(i),varmin(i),varmax(i)
+       enddo
+       call LIS_releaseUnitNumber(ftn)  
+       
+       allocate(ssdev(LIS_rc%obs_ngrid(k)))
+       
+       if(trim(LIS_rc%perturb_obs(k)).ne."none") then 
+          allocate(obs_pert%vname(1))
+          allocate(obs_pert%perttype(1))
+          allocate(obs_pert%ssdev(1))
+          allocate(obs_pert%stdmax(1))
+          allocate(obs_pert%zeromean(1))
+          allocate(obs_pert%tcorr(1))
+          allocate(obs_pert%xcorr(1))
+          allocate(obs_pert%ycorr(1))
+          allocate(obs_pert%ccorr(1,1))
+
+          call LIS_readPertAttributes(1,LIS_rc%obspertAttribfile(k),&
+               obs_pert)
+
+! Set obs err to be uniform (will be rescaled later for each grid point). 
+          ssdev = obs_pert%ssdev(1)
+          MODIS_MLSWE_struc(n)%ssdev_inp = obs_pert%ssdev(1)
+
+          pertField(n) = ESMF_FieldCreate(arrayspec=pertArrSpec,&
+               grid=LIS_obsensOnGrid(n,k),name="Observation"//vid(1)//vid(2),&
+               rc=status)
+          call LIS_verify(status)
+          
+! initializing the perturbations to be zero 
+          call ESMF_FieldGet(pertField(n),localDE=0,farrayPtr=obs_temp,rc=status)
+          call LIS_verify(status)
+          obs_temp(:,:) = 0 
+
+          call ESMF_AttributeSet(pertField(n),"Perturbation Type",&
+               obs_pert%perttype(1), rc=status)
+          call LIS_verify(status)
+
+          if(LIS_rc%obs_ngrid(k).gt.0) then 
+             call ESMF_AttributeSet(pertField(n),"Standard Deviation",&
+                  ssdev,itemCount=LIS_rc%obs_ngrid(k),rc=status)
+             call LIS_verify(status)
+          endif
+          
+          call ESMF_AttributeSet(pertField(n),"Std Normal Max",&
+               obs_pert%stdmax(1), rc=status)
+          call LIS_verify(status)
+          
+          call ESMF_AttributeSet(pertField(n),"Ensure Zero Mean",&
+               obs_pert%zeromean(1),rc=status)
+          call LIS_verify(status)
+          
+          call ESMF_AttributeSet(pertField(n),"Temporal Correlation Scale",&
+               obs_pert%tcorr(1),rc=status)
+          call LIS_verify(status)
+          
+          call ESMF_AttributeSet(pertField(n),"X Correlation Scale",&
+               obs_pert%xcorr(1),rc=status)
+          
+          call ESMF_AttributeSet(pertField(n),"Y Correlation Scale",&
+               obs_pert%ycorr(1),rc=status)
+
+          call ESMF_AttributeSet(pertField(n),"Cross Correlation Strength",&
+               obs_pert%ccorr(1,:),itemCount=1,rc=status)
+          
+          call ESMF_StateAdd(OBS_Pert_State(n),(/pertField(n)/),rc=status)
+          call LIS_verify(status)         
+          
+       endif
+          
+       deallocate(vname)
+       deallocate(varmax)
+       deallocate(varmin)
+       deallocate(ssdev)
+
+    enddo
+    write(LIS_logunit,*) &
+         '[INFO] Created the States to hold the MODIS ML SWE observations data'
+    
+    do n=1,LIS_rc%nnest
+
+       if(LIS_rc%lis_obs_map_proj(k).eq."latlon") then
+          cornerlat1 = max(-89.995833, nint((LIS_rc%obs_gridDesc(k,4)+89.995833)/0.008333)*0.008333-89.995833-50*0.008333)
+          cornerlon1 = max(-179.995833, nint((LIS_rc%obs_gridDesc(k,5)+179.995833)/0.008333)*0.008333-179.995833-50*0.008333)
+          cornerlat2 = min(89.9791666, nint((LIS_rc%obs_gridDesc(k,7)+89.995833)/0.008333)*0.008333-89.995833+50*0.008333)
+          cornerlon2 = min(179.9791666, nint((LIS_rc%obs_gridDesc(k,8)+179.995833)/0.008333)*0.008333-179.995833+50*0.008333)
+       elseif(LIS_rc%lis_obs_map_proj(k).eq."lambert") then
+          cornerlat1 = max(-89.995833, nint((LIS_rc%minLat(n)+59.9978927)/0.008333)*0.008333-89.995833-50*0.008333)
+          cornerlon1 = max(-179.995833, nint((LIS_rc%minLon(n)+179.995833)/0.008333)*0.008333-179.995833-50*0.008333)
+          cornerlat2 = min(89.9791666, nint((LIS_rc%maxLat(n)+59.9978927)/0.008333)*0.008333-89.995833+50*0.008333)
+          cornerlon2 = min(179.9791666, nint((LIS_rc%maxLon(n)+179.995833)/0.008333)*0.008333-179.995833+50*0.008333)
+       endif
+
+       
+       MODIS_MLSWE_struc(n)%nc = nint((cornerlon2-cornerlon1)/0.008333)+1
+       MODIS_MLSWE_struc(n)%nr = nint((cornerlat2-cornerlat1)/0.008333)+1
+
+       MODIS_MLSWE_struc(n)%gridDesci(1) = 0 
+       MODIS_MLSWE_struc(n)%gridDesci(2) = MODIS_MLSWE_struc(n)%nc
+       MODIS_MLSWE_struc(n)%gridDesci(3) = MODIS_MLSWE_struc(n)%nr 
+       MODIS_MLSWE_struc(n)%gridDesci(4) = cornerlat1
+       MODIS_MLSWE_struc(n)%gridDesci(5) = cornerlon1
+       MODIS_MLSWE_struc(n)%gridDesci(6) = 128
+       MODIS_MLSWE_struc(n)%gridDesci(7) = cornerlat2
+       MODIS_MLSWE_struc(n)%gridDesci(8) = cornerlon2
+       MODIS_MLSWE_struc(n)%gridDesci(9) = 0.008333
+       MODIS_MLSWE_struc(n)%gridDesci(10) = 0.008333
+       MODIS_MLSWE_struc(n)%gridDesci(20) = 64
+
+       MODIS_MLSWE_struc(n)%mi = MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr
+
+!-----------------------------------------------------------------------------
+!   Use interpolation if LIS is running finer than 500 m. 
+!-----------------------------------------------------------------------------
+       if(LIS_rc%obs_gridDesc(k,10).le.0.008333) then 
+
+          allocate(MODIS_MLSWE_struc(n)%rlat(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%rlon(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%n11(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%n12(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%n21(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%n22(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%w11(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%w12(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%w21(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          allocate(MODIS_MLSWE_struc(n)%w22(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k)))
+          
+          call bilinear_interp_input_withgrid(MODIS_MLSWE_struc(n)%gridDesci(:), &
+               LIS_rc%obs_gridDesc(k,:),&
+               LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k),&
+               MODIS_MLSWE_struc(n)%rlat, MODIS_MLSWE_struc(n)%rlon,&
+               MODIS_MLSWE_struc(n)%n11, MODIS_MLSWE_struc(n)%n12, &
+               MODIS_MLSWE_struc(n)%n21, MODIS_MLSWE_struc(n)%n22, &
+               MODIS_MLSWE_struc(n)%w11, MODIS_MLSWE_struc(n)%w12, &
+               MODIS_MLSWE_struc(n)%w21, MODIS_MLSWE_struc(n)%w22)
+       else
+          
+          allocate(MODIS_MLSWE_struc(n)%n11(&
+               MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr))
+
+          call upscaleByAveraging_input(MODIS_MLSWE_struc(n)%gridDesci(:),&
+               LIS_rc%obs_gridDesc(k,:),&
+               MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr, &
+               LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k), MODIS_MLSWE_struc(n)%n11)
+       endif
+
+       call LIS_registerAlarm("MODIS MLSWE read alarm",&
+            MODIS_MLSWE_struc(n)%dataTS,&
+            MODIS_MLSWE_struc(n)%dataTS)
+
+
+       MODIS_MLSWE_struc(n)%startMode = .true. 
+
+       call ESMF_StateAdd(OBS_State(n),(/obsField(n)/),rc=status)
+       call LIS_verify(status)
+     
+    enddo
+   
+  end subroutine MODIS_MLSWE_setup
+
+end module MODIS_MLSWEmod

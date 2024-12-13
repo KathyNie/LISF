@@ -46,7 +46,7 @@ MODULE MODULE_SF_NOAHMPLSM_401
   public  ::               DIVIDE    !Yeosang Yoon; for snow DA, change private -> public
   private ::               COMBO 
   public  ::               COMPACT   !Yeosang Yoon; for snow DA, change private -> public
-  public  ::               SNOWH2O
+  private ::               SNOWH2O
   private ::       SOILWATER
   private ::               ZWTEQ
   private ::               INFIL

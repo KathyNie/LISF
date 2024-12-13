@@ -264,17 +264,6 @@ subroutine noahmp401_snow_update(n, t, dsneqv, dsnowh)
      endif
   endif
 
-! check and correct layer number in instances when dzsnso of the top layer is zero
-  if(dzsnso(isnow+1).eq.0.) then
-    isnow = isnow + 1
-  endif
-
-! set top layer of snow to zero if it is too thin (test 0.5 mm)
-  if(dzsnso(isnow+1).lt.0.0005) then
-    dzsnso(isnow+1) = 0
-    isnow = isnow + 1
-  endif
-
   ! ice fraction at the last timestep, add check for both snice and snliq are 0.0
   do snl_idx=isnow+1,0
     if(snice(snl_idx)+snliq(snl_idx)>0.0) then

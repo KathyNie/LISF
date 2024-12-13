@@ -40,9 +40,13 @@ module geis_forcingMod
 
   type, public ::  geis_type_dec 
      real          :: ts
+     integer       :: usescal
      integer       :: ncold, nrold   ! AWIPS 212 dimensions
      character*50  :: geis_filesrc
      character(len=LIS_CONST_PATH_LEN) :: geisdir ! NLDAS-2 Forcing Directory
+     character(len=LIS_CONST_PATH_LEN) :: gpcpclimodir
+     character(len=LIS_CONST_PATH_LEN) :: hydroscsclimodir
+     character(len=LIS_CONST_PATH_LEN) :: scaletimescale
      real*8        :: geistime1,geistime2
 
      integer                :: findtime1, findtime2

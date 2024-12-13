@@ -86,7 +86,7 @@ module LIS_timeMgrMod
      real*8       :: alarmTime
      real         :: ts
      integer      :: prev_mo
-     integer      :: monthCount
+     integer      :: counter
      integer      :: alarm_offset ! seconds to add to alarm time
                                   ! All alarms are based off 0z,
                                   ! so a 3-hourly alarm will ring
@@ -432,7 +432,7 @@ contains
     current => LIS_alarmList
     do while(associated(current%next)) 
        current%prev_mo    = -1
-       current%monthCount = 0
+       current%counter = 0
        current%alarmTime  = 0.0
        if ( current%intervalType == "dekad" ) then
           if ( current%when == "begin" ) then
@@ -544,7 +544,7 @@ contains
     current => LIS_alarmList
     do while(associated(current%next)) 
        current%prev_mo    = -1
-       current%monthCount = 0
+       current%counter = 0
        current%alarmTime  = 0.0
        if ( current%intervalType == "dekad" ) then
           if ( current%when == "begin" ) then
@@ -3117,7 +3117,7 @@ subroutine LIS_registerAlarm(name, ts, interval, intervalType, alarm_offset, &
   alrmEntry%interval     = interval
   alrmEntry%ts           = ts
   alrmEntry%prev_mo      = -1
-  alrmEntry%monthCount   = 0
+  alrmEntry%counter   = 0
   alrmEntry%firstInstance = .true. 
   alrmEntry%alarm_offset = 0
   alrmEntry%dek_offset   = 0
@@ -3234,6 +3234,7 @@ end subroutine LIS_registerAlarm
    real    :: gmt
    integer :: refjuld, sjuld,doy
    integer :: ts_frac_s, ts_frac_ms
+   real    :: cinterval
 
    zeroi = 0 
    numi = 0 
@@ -3362,13 +3363,13 @@ end subroutine LIS_registerAlarm
       call LIS_verify(status, 'error in ESMF_TimeSet: LIS_timeMgrMod')
 
       if(mo.ne.current%prev_mo) then
-         current%monthCount = current%monthCount + 1
-         if(current%monthCount.eq.mfactor.and.&
+         current%counter = current%counter + 1
+         if(current%counter.eq.mfactor.and.&
               current%prev_mo.ne.-1) then 
             isAlarmRinging = .true.
          endif
-         if(current%monthCount.eq.mfactor) then 
-            current%monthCount = 0
+         if(current%counter.eq.mfactor) then 
+            current%counter = 0
          endif
          current%prev_mo = mo
       else
@@ -3390,13 +3391,25 @@ end subroutine LIS_registerAlarm
            firstInstance=current%firstInstance)
       current%firstInstance = .false. 
 
-   ! Alarm for intervals at daily and less (e.g., hour, or minutes):
-   elseif(mod(real(LIS_rc%hr)*3600+60*real(LIS_rc%mn)+    &
-              real(LIS_rc%ss)+real(current%alarm_offset), &
-          current%interval).eq.0.0) then 
-      isAlarmRinging = .true. 
+      ! Alarm for intervals at daily and less (e.g., hour, or minutes):
+   elseif(current%interval.le.86400.0) then !monthly      
+      if(mod(real(LIS_rc%hr)*3600+60*real(LIS_rc%mn)+    &
+           real(LIS_rc%ss)+real(current%alarm_offset), &
+           current%interval).eq.0.0) then 
+         isAlarmRinging = .true. 
+      endif
+   else !assuming some multiple of a day
+      cinterval = 86400.0
+      if(mod(real(LIS_rc%hr)*3600+60*real(LIS_rc%mn)+    &
+           real(LIS_rc%ss)+real(current%alarm_offset), &
+           cinterval).eq.0.0) then
+         current%counter = current%counter + 1
+         if(current%counter.eq.nint(current%interval/cinterval)) then
+            isAlarmRinging = .true.
+            current%counter = 0 
+         endif
+      endif
    endif
-
  end function IsAlarmRinging
 
 

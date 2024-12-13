@@ -158,7 +158,7 @@ subroutine get_geis(n,findex)
         
         write(unit=LIS_logunit,fmt=*)'[INFO] getting file1.. ',trim(name)
         order = 1
-        call read_geis(n,kk,findex,order,mo1,name,ferror)
+        call read_geis(n,kk,findex,order,mo1,doy1,name,ferror)
 
 
         if(ferror.ge.1) geis_struc(n)%geistime1=time1
@@ -189,7 +189,7 @@ subroutine get_geis(n,findex)
         write(unit=LIS_logunit,fmt=*)'[INFO] getting file2a.. ',trim(name)
         order = 2
 
-        call read_geis(n,kk,findex,order,mo2,name,ferror)
+        call read_geis(n,kk,findex,order,mo2,doy2,name,ferror)
         
         if(ferror.ge.1) then
            geis_struc(n)%geistime2=time2
@@ -262,7 +262,7 @@ end subroutine get_geis
    write(UNIT=fdir,fmt='(i4,i2.2)') yr, mo 
    write(UNIT=ftime,fmt='(i4,i2.2,i2.2,i2.2)') yr, mo, da, hr
 
-   filename = trim(odir) // '/' // fdir // '/MERRA2_CERES_IMERG_' // &
+   filename = trim(odir) // '/' // fdir // '/HydroSCS_' // &
         trim(ftime)//'00.d01.nc' 
 
 end subroutine get_geis_filename
