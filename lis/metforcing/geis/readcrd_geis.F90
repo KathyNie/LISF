@@ -32,6 +32,7 @@ subroutine readcrd_geis()
 
   implicit none
   integer :: n,rc
+  logical :: usescal
 
   call ESMF_ConfigFindLabel(LIS_config,"Global EIS forcing directory:",rc=rc)
   call LIS_verify(rc, 'Global EIS forcing directory: not defined')
@@ -39,6 +40,35 @@ subroutine readcrd_geis()
      call ESMF_ConfigGetAttribute(LIS_config,geis_struc(n)%geisdir,rc=rc)
   enddo
 
+  usescal = .false. 
+  call ESMF_ConfigFindLabel(LIS_config,"Global EIS forcing scale to GPCP:",rc=rc)
+  call LIS_verify(rc, 'Global EIS forcing scale to GPCP: not defined')
+  do n=1,LIS_rc%nnest    
+     call ESMF_ConfigGetAttribute(LIS_config,geis_struc(n)%usescal,rc=rc)
+     usescal = geis_struc(n)%usescal
+  enddo
+
+  if(usescal) then
+
+     call ESMF_ConfigFindLabel(LIS_config,"Global EIS forcing scaling timescale:",rc=rc)
+     call LIS_verify(rc, 'Global EIS forcing scaling timescale: not defined')
+     do n=1,LIS_rc%nnest    
+        call ESMF_ConfigGetAttribute(LIS_config,geis_struc(n)%scaletimescale,rc=rc)
+     enddo
+     
+     call ESMF_ConfigFindLabel(LIS_config,"Global EIS forcing GPCP climatology directory:",rc=rc)
+     call LIS_verify(rc, 'Global EIS forcing GPCP climatology directory: not defined')
+     do n=1,LIS_rc%nnest    
+        call ESMF_ConfigGetAttribute(LIS_config,geis_struc(n)%gpcpclimodir,rc=rc)
+     enddo
+     call ESMF_ConfigFindLabel(LIS_config,"Global EIS forcing climatology directory:",rc=rc)
+     call LIS_verify(rc, 'Global EIS forcing climatology directory: not defined')
+     do n=1,LIS_rc%nnest    
+        call ESMF_ConfigGetAttribute(LIS_config,geis_struc(n)%hydroscsclimodir,rc=rc)
+     enddo
+     
+  endif
+  
   write(unit=LIS_logunit,fmt=*)'[INFO] Using Global EIS forcing'
 
   do n=1,LIS_rc%nnest

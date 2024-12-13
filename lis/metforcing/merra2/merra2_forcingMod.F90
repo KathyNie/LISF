@@ -11,11 +11,6 @@ module merra2_forcingMod
 !BOP
 ! !MODULE: merra2_forcingMod
 !
-! !REVISION HISTORY:
-! 18 Mar 2015: James Geiger, initial code (based on merra-land)
-! 13 Sep 2024: Sujay Kumar, Initial code for using dynamic lapse rate
-! 31 Oct 2024: David Mocko, Final code for using dynamic lapse rate
-!
 ! !DESCRIPTION:
 !  This module contains variables and data structures that are used
 !  for the implementation of the MERRA2 forcing data.
@@ -103,7 +98,6 @@ module merra2_forcingMod
      integer                :: findtime1, findtime2
      logical                :: startFlag, dayFlag
      real, allocatable      :: merraforc1(:,:,:,:), merraforc2(:,:,:,:)
-     real, allocatable      :: lapserate1(:,:), lapserate2(:,:)
 
      integer            :: nvars
      integer            :: uselml
@@ -131,9 +125,6 @@ module merra2_forcingMod
      real, allocatable       :: merraxrange(:,:,:,:)
      real, allocatable       :: merracdf(:,:,:,:)
      integer, allocatable    :: rseed(:,:)
-     integer                 :: usedynlapserate
-     character(len=LIS_CONST_PATH_LEN) :: dynlapseratedir
-     
   end type merra2_type_dec
 
   type(merra2_type_dec), allocatable :: merra2_struc(:)
@@ -272,11 +263,6 @@ contains
                trim(LIS_rc%met_interp(findex))//&
                ' for MERRA2 forcing is not supported'
           call LIS_endrun()
-       endif
-
-       if (merra2_struc(n)%usedynlapserate.eq.1) then
-          allocate(merra2_struc(n)%lapserate1(LIS_rc%ngrid(n),24))
-          allocate(merra2_struc(n)%lapserate2(LIS_rc%ngrid(n),24))
        endif
 
        call LIS_registerAlarm("MERRA2 forcing alarm",&

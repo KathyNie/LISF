@@ -16,12 +16,13 @@
 ! 15 Nov 2023; Sujay Kumar, Initial Code
 ! 
 ! !INTERFACE:
-subroutine read_geis(n, kk, findex, order, month, name,ferror)
+subroutine read_geis(n, kk, findex, order, month, doy, name,ferror)
 ! !USES:
   use LIS_coreMod
   use LIS_logMod, only         : LIS_logunit, LIS_verify, LIS_warning
   use LIS_metforcingMod, only  : LIS_forc
   use geis_forcingMod, only  : geis_struc
+  use LIS_constantsMod,   only : LIS_CONST_PATH_LEN  
 #if (defined USE_NETCDF3 || defined USE_NETCDF4)
   use netcdf
 #endif
@@ -32,7 +33,8 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
   integer, intent(in)       :: kk      ! Forecast member index
   integer, intent(in)       :: findex  ! Forcing index
   integer, intent(in)       :: order
-  integer, intent(out)      :: month
+  integer, intent(in)       :: month
+  integer, intent(in)       :: doy
   character(len=*), intent(in) :: name
   integer, intent(out)      :: ferror
 !
@@ -62,11 +64,18 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
 !EOP
 
   integer                   :: ftn
+  character(len=LIS_CONST_PATH_LEN) :: gpcpclimoname
+  character(len=LIS_CONST_PATH_LEN) :: hydroscsclimoname
   integer                   :: geis,varid
   integer                   :: k,t,c,r,iret,rc
   logical                   :: file_exists
   real                      :: varfield(LIS_rc%lnc(n),LIS_rc%lnr(n))
-
+  real                      :: varfield1(LIS_rc%lnc(n),LIS_rc%lnr(n))
+  real                      :: gpcpclimo(LIS_rc%lnc(n),LIS_rc%lnr(n))
+  real                      :: hydroscsclimo(LIS_rc%lnc(n),LIS_rc%lnr(n))
+  character*3               :: fdoy
+  character*2               :: fmo
+  
   ferror = 1
 
 #if (defined USE_NETCDF4)
@@ -75,13 +84,89 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
   varfield = 0 
   ferror = 1
 
+  if(geis_struc(n)%usescal.eq.1) then
+
+     if(geis_struc(n)%scaletimescale.eq."monthly") then
+
+        write(UNIT=fmo,fmt='(i2.2)') month
+        gpcpclimoname = trim(geis_struc(n)%gpcpclimodir)//'/GPCP_MONTHLY_CLIMO_'//&
+             trim(fmo)//'.nc'
+        hydroscsclimoname = trim(geis_struc(n)%hydroscsclimodir)//&
+             '/HydroSCS_MONTHLY_CLIMO_'//&
+             trim(fmo)//'.nc'
+        
+        inquire (file=gpcpclimoname, exist=file_exists)
+        if (file_exists) then      
+           write(LIS_logunit,*) '[INFO] Reading ',trim(gpcpclimoname)
+           call LIS_verify(nf90_open(path=trim(gpcpclimoname), mode=NF90_NOWRITE, &
+                ncid=ftn), 'nf90_open failed in read_geis')
+           call LIS_verify(nf90_inq_varid(ftn,'PRCP',varId), &
+                'nf90_inq_varid failed for Tair in read_geis')
+           call LIS_verify(nf90_get_var(ftn,varId, gpcpclimo,&
+                start=(/geis_struc(n)%c_off,&
+                geis_struc(n)%r_off/),&
+                count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
+                'nf90_get_var failed for PRCP in read_geis')           
+           call LIS_verify(nf90_close(ftn))
+        endif
+        inquire (file=hydroscsclimoname, exist=file_exists)
+        if (file_exists) then      
+           write(LIS_logunit,*) '[INFO] Reading ',trim(hydroscsclimoname)
+           call LIS_verify(nf90_open(path=trim(hydroscsclimoname), mode=NF90_NOWRITE, &
+                ncid=ftn), 'nf90_open failed in read_geis')
+           call LIS_verify(nf90_inq_varid(ftn,'PRCP',varId), &
+                'nf90_inq_varid failed for Tair in read_geis')
+           call LIS_verify(nf90_get_var(ftn,varId, hydroscsclimo,&
+                start=(/geis_struc(n)%c_off,&
+                geis_struc(n)%r_off/),&
+                count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
+                'nf90_get_var failed for PRCP in read_geis')           
+           call LIS_verify(nf90_close(ftn))
+        endif
+     else
+        write(UNIT=fdoy,fmt='(i3.3)') doy
+        gpcpclimoname = trim(geis_struc(n)%gpcpclimodir)//'/GPCP_DAILY_CLIMO_'//&
+             trim(fdoy)//'.nc'
+        hydroscsclimoname = trim(geis_struc(n)%hydroscsclimodir)//&
+             '/HydroSCS_DAILY_CLIMO_'//&
+             trim(fdoy)//'.nc'
+        
+        inquire (file=gpcpclimoname, exist=file_exists)
+        if (file_exists) then      
+           write(LIS_logunit,*) '[INFO] Reading ',trim(gpcpclimoname)
+           call LIS_verify(nf90_open(path=trim(gpcpclimoname), mode=NF90_NOWRITE, &
+                ncid=ftn), 'nf90_open failed in read_geis')
+           call LIS_verify(nf90_inq_varid(ftn,'PRCP',varId), &
+                'nf90_inq_varid failed for Tair in read_geis')
+           call LIS_verify(nf90_get_var(ftn,varId, gpcpclimo,&
+                start=(/geis_struc(n)%c_off,&
+                geis_struc(n)%r_off/),&
+                count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
+                'nf90_get_var failed for PRCP in read_geis')           
+           call LIS_verify(nf90_close(ftn))
+        endif
+        inquire (file=hydroscsclimoname, exist=file_exists)
+        if (file_exists) then      
+           write(LIS_logunit,*) '[INFO] Reading ',trim(hydroscsclimoname)
+           call LIS_verify(nf90_open(path=trim(hydroscsclimoname), mode=NF90_NOWRITE, &
+                ncid=ftn), 'nf90_open failed in read_geis')
+           call LIS_verify(nf90_inq_varid(ftn,'PRCP',varId), &
+                'nf90_inq_varid failed for Tair in read_geis')
+           call LIS_verify(nf90_get_var(ftn,varId, hydroscsclimo,&
+                start=(/geis_struc(n)%c_off,&
+                geis_struc(n)%r_off/),&
+                count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
+                'nf90_get_var failed for PRCP in read_geis')           
+           call LIS_verify(nf90_close(ftn))
+        endif
+     endif
+  endif
   inquire (file=name, exist=file_exists)
   if (file_exists) then      
-
-
+     
      call LIS_verify(nf90_open(path=trim(name), mode=NF90_NOWRITE, &
           ncid=ftn), 'nf90_open failed in read_geis')
-          
+     
      call LIS_verify(nf90_inq_varid(ftn,'Tair',varId), &
           'nf90_inq_varid failed for Tair in read_geis')
      call LIS_verify(nf90_get_var(ftn,varId, varfield,&
@@ -89,7 +174,7 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
           geis_struc(n)%r_off/),&
           count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
           'nf90_get_var failed for Tair in read_geis')             
-
+     
      do r=1,LIS_rc%lnr(n)
         do c=1,LIS_rc%lnc(n)
            if(LIS_domain(n)%gindex(c,r).ne.-1) then 
@@ -105,7 +190,7 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
            endif
         end do
      enddo
-
+     
      call LIS_verify(nf90_inq_varid(ftn,'Qair',varId), &
           'nf90_inq_varid failed for Qair in read_geis')
      call LIS_verify(nf90_get_var(ftn,varId, varfield,&
@@ -113,7 +198,7 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
           geis_struc(n)%r_off/),&
           count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
           'nf90_get_var failed for Qair in read_geis')             
-
+     
      do r=1,LIS_rc%lnr(n)
         do c=1,LIS_rc%lnc(n)
            if(LIS_domain(n)%gindex(c,r).ne.-1) then 
@@ -129,8 +214,8 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
            endif
         end do
      enddo
-
-
+     
+        
      call LIS_verify(nf90_inq_varid(ftn,'SWdown',varId), &
           'nf90_inq_varid failed for SWdown in read_geis')
      call LIS_verify(nf90_get_var(ftn,varId, varfield,&
@@ -138,7 +223,7 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
           geis_struc(n)%r_off/),&
           count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
           'nf90_get_var failed for SWdown in read_geis')             
-
+     
      do r=1,LIS_rc%lnr(n)
         do c=1,LIS_rc%lnc(n)
            if(LIS_domain(n)%gindex(c,r).ne.-1) then 
@@ -154,8 +239,8 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
            endif
         end do
      enddo
-
-
+     
+     
      call LIS_verify(nf90_inq_varid(ftn,'LWdown',varId), &
           'nf90_inq_varid failed for LWdown in read_geis')
      call LIS_verify(nf90_get_var(ftn,varId, varfield,&
@@ -163,7 +248,7 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
           geis_struc(n)%r_off/),&
           count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
           'nf90_get_var failed for LWdown in read_geis')             
-
+     
      do r=1,LIS_rc%lnr(n)
         do c=1,LIS_rc%lnc(n)
            if(LIS_domain(n)%gindex(c,r).ne.-1) then 
@@ -179,32 +264,40 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
            endif
         end do
      enddo
-          
-
-     call LIS_verify(nf90_inq_varid(ftn,'Wind',varId), &
-          'nf90_inq_varid failed for Wind in read_geis')
+     
+     
+     call LIS_verify(nf90_inq_varid(ftn,'Wind_N',varId), &
+          'nf90_inq_varid failed for Wind_N in read_geis')
      call LIS_verify(nf90_get_var(ftn,varId, varfield,&
           start=(/geis_struc(n)%c_off,&
           geis_struc(n)%r_off/),&
           count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
-          'nf90_get_var failed for Wind in read_geis')             
-
+          'nf90_get_var failed for Wind_E in read_geis')
+     call LIS_verify(nf90_inq_varid(ftn,'Wind_E',varId), &
+          'nf90_inq_varid failed for Wind in read_geis')
+     call LIS_verify(nf90_get_var(ftn,varId, varfield1,&
+          start=(/geis_struc(n)%c_off,&
+          geis_struc(n)%r_off/),&
+          count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
+          'nf90_get_var failed for Wind_E in read_geis')               
+     
+     
      do r=1,LIS_rc%lnr(n)
         do c=1,LIS_rc%lnc(n)
            if(LIS_domain(n)%gindex(c,r).ne.-1) then 
               if(order.eq.1) then 
                  geis_struc(n)%metdata1(kk,5,&
                       LIS_domain(n)%gindex(c,r)) &
-                      = varfield(c,r)
+                      = sqrt(varfield(c,r)**2 + varfield1(c,r)**2)
               elseif(order.eq.2) then 
                  geis_struc(n)%metdata2(kk,5,&
                       LIS_domain(n)%gindex(c,r))&
-                      = varfield(c,r)
+                      = sqrt(varfield(c,r)**2 + varfield1(c,r)**2)
               endif
            endif
         end do
      enddo
-
+     
      call LIS_verify(nf90_inq_varid(ftn,'Psurf',varId), &
           'nf90_inq_varid failed for Psurf in read_geis')
      call LIS_verify(nf90_get_var(ftn,varId, varfield,&
@@ -212,7 +305,7 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
           geis_struc(n)%r_off/),&
           count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
           'nf90_get_var failed for Psurf in read_geis')             
-
+     
      do r=1,LIS_rc%lnr(n)
         do c=1,LIS_rc%lnc(n)
            if(LIS_domain(n)%gindex(c,r).ne.-1) then 
@@ -228,7 +321,7 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
            endif
         end do
      enddo
-
+     
      call LIS_verify(nf90_inq_varid(ftn,'Rainf',varId), &
           'nf90_inq_varid failed for Rainf in read_geis')
      call LIS_verify(nf90_get_var(ftn,varId, varfield,&
@@ -236,14 +329,27 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
           geis_struc(n)%r_off/),&
           count=(/LIS_rc%lnc(n),LIS_rc%lnr(n)/)),&
           'nf90_get_var failed for Rainf in read_geis')             
-
+     
+     if(geis_struc(n)%usescal.eq.1) then
+        do r=1,LIS_rc%lnr(n)
+           do c=1,LIS_rc%lnc(n)
+              
+              if(hydroscsclimo(c,r).ne.0) then
+                 varfield(c,r) = varfield(c,r)*gpcpclimo(c,r)/&
+                      hydroscsclimo(c,r)
+              endif
+           enddo
+        enddo
+     endif
+     
      do r=1,LIS_rc%lnr(n)
         do c=1,LIS_rc%lnc(n)
            if(LIS_domain(n)%gindex(c,r).ne.-1) then 
-              if(order.eq.1) then 
+              if(order.eq.1) then
                  geis_struc(n)%metdata1(kk,7,&
                       LIS_domain(n)%gindex(c,r)) &
                       = varfield(c,r)
+                 
               elseif(order.eq.2) then 
                  geis_struc(n)%metdata2(kk,7,&
                       LIS_domain(n)%gindex(c,r))&
@@ -252,7 +358,8 @@ subroutine read_geis(n, kk, findex, order, month, name,ferror)
            endif
         end do
      enddo
-      
+     
+     call LIS_verify(nf90_close(ftn))
      
   else
      write(LIS_logunit,*) &

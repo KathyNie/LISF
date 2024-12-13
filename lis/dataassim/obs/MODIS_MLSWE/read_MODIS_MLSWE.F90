@@ -1,0 +1,442 @@
+!-----------------------BEGIN NOTICE -- DO NOT EDIT-----------------------
+! NASA Goddard Space Flight Center
+! Land Information System Framework (LISF)
+! Version 7.4
+!
+! Copyright (c) 2022 United States Government as represented by the
+! Administrator of the National Aeronautics and Space Administration.
+! All Rights Reserved.
+!-------------------------END NOTICE -- DO NOT EDIT-----------------------
+#include "LIS_misc.h"
+!BOP
+! !ROUTINE: read_MODIS_MLSWE
+! \label{read_MODIS_MLSWE}
+!
+! !REVISION HISTORY:
+!  08 Jun 2022: Sujay Kumar; Initial version
+!
+! !INTERFACE: 
+subroutine read_MODIS_MLSWE(n, k, OBS_State, OBS_Pert_State)
+! !USES: 
+  use ESMF
+  use LIS_mpiMod
+  use LIS_coreMod
+  use LIS_logMod
+  use LIS_timeMgrMod
+  use LIS_dataAssimMod
+  use map_utils
+  use LIS_pluginIndices
+  use LIS_DAobservationsMod
+  use LIS_constantsMod, only : LIS_CONST_PATH_LEN
+  use MODIS_MLSWEMod, only : MODIS_MLSWE_struc
+#if ( defined USE_NETCDF3 || defined USE_NETCDF4 )
+  use netcdf
+#endif
+  
+  implicit none
+! !ARGUMENTS: 
+  integer, intent(in) :: n 
+  integer, intent(in) :: k
+  type(ESMF_State)    :: OBS_State
+  type(ESMF_State)    :: OBS_Pert_State
+!
+! !DESCRIPTION:
+!  
+!  reads the MODIS_MLSWE observations and prepares them for DA
+!  
+!  
+!  The arguments are: 
+!  \begin{description}
+!  \item[n] index of the nest
+!  \item[OBS\_State] observations state
+!  \end{description}
+!
+!EOP
+  integer                :: ftn,status
+  character(len=LIS_CONST_PATH_LEN) :: sweobsdir
+  character(len=LIS_CONST_PATH_LEN) :: fname
+  logical                :: alarmCheck
+  integer                :: t,c,r,i,j,p,jj
+  integer                :: sweId,ierr
+  real,          pointer :: obsl(:)
+  type(ESMF_Field)       :: swefield, pertField
+  integer                :: gid(LIS_rc%obs_ngrid(k))
+  integer                :: assimflag(LIS_rc%obs_ngrid(k))
+  logical                :: data_update
+  logical                :: data_upd_flag(LIS_npes)
+  logical                :: data_upd_flag_local
+  logical                :: data_upd
+  logical*1, allocatable :: swe_data_b(:)
+  real                   :: sweobs(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k))
+  real                   :: sweunc(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k))
+  real, allocatable      :: var(:,:)
+  real, allocatable      :: swe1d(:)
+  real                   :: swe_current(LIS_rc%obs_lnc(k),LIS_rc%obs_lnr(k))
+  integer                :: fnd,gindex
+  real                   :: cornerlat1, cornerlon1
+  integer                :: lat_off, lon_off
+  real, allocatable      :: ssdev(:)     
+  logical                :: file_exists,dataCheck
+
+    
+  call ESMF_AttributeGet(OBS_State,"Data Directory",&
+       sweobsdir, rc=status)
+  call LIS_verify(status)
+  call ESMF_AttributeGet(OBS_State,"Data Update Status",&
+       data_update, rc=status)
+  call LIS_verify(status)
+
+  sweobs = LIS_rc%udef
+  data_upd = .false. 
+!-------------------------------------------------------------------------
+!   Read both ascending and descending passes at 0Z and then store
+!   the overpass time as 1.30AM for the descending pass and 1.30PM 
+!   for the ascending pass. 
+!-------------------------------------------------------------------------
+  alarmCheck = LIS_isAlarmRinging(LIS_rc, "MODIS MLSWE read alarm")
+  
+  if(alarmCheck.or.MODIS_MLSWE_struc(n)%startMode) then
+
+     sweobs = LIS_rc%udef
+     
+     call create_MODIS_MLSWE_filename(sweobsdir, &
+          LIS_rc%yr, LIS_rc%mo, &
+          LIS_rc%da, fname)
+     
+     inquire(file=fname,exist=file_exists)
+     if(file_exists) then
+        
+        write(LIS_logunit,*) '[INFO] Reading ',trim(fname)
+        
+        call read_MODIS_ML_SWE_data(n,k, fname, sweobs, sweunc)
+        fnd = 1
+     else
+        fnd = 0 
+        write(LIS_logunit,*) '[WARN] Missing SWE file: ',trim(fname)
+     endif
+  endif
+
+  dataCheck = .false.
+  if(alarmCheck.or.MODIS_MLSWE_struc(n)%startMode) then
+     if(fnd.eq.1) then 
+        dataCheck = .true. 
+     endif
+  else
+     fnd = 0 
+     dataCheck = .false.
+  endif
+  MODIS_MLSWE_struc(n)%startMode = .false.
+  
+  if(dataCheck) then 
+     
+     call ESMF_StateGet(OBS_State,"Observation01",swefield,&
+          rc=status)
+     call LIS_verify(status, 'Error: StateGet Observation01')
+     
+     call ESMF_FieldGet(swefield,localDE=0,farrayPtr=obsl,rc=status)
+     call LIS_verify(status, 'Error: FieldGet')
+     
+     obsl = LIS_rc%udef 
+     do r=1, LIS_rc%obs_lnr(k)
+        do c=1, LIS_rc%obs_lnc(k)
+           if(LIS_obs_domain(n,k)%gindex(c,r).ne.-1) then 
+              obsl(LIS_obs_domain(n,k)%gindex(c,r))=&
+                   sweobs(c+(r-1)*LIS_rc%obs_lnc(k))
+           endif
+        enddo
+     enddo
+     
+     if(fnd.eq.0) then 
+        data_upd_flag_local = .false. 
+     else
+        data_upd_flag_local = .true. 
+     endif
+     
+#if (defined SPMD)
+     call MPI_ALLGATHER(data_upd_flag_local,1, &
+          MPI_LOGICAL, data_upd_flag(:),&
+          1, MPI_LOGICAL, LIS_mpi_comm, status)
+#endif
+     data_upd = .false.
+     do p=1,LIS_npes
+        data_upd = data_upd.or.data_upd_flag(p)
+     enddo
+     
+     if(data_upd) then 
+        
+        do t=1,LIS_rc%obs_ngrid(k)
+           gid(t) = t
+           if(obsl(t).ne.-9999.0) then 
+              assimflag(t) = 1
+           else
+              assimflag(t) = 0
+           endif
+        enddo
+        
+        call ESMF_AttributeSet(OBS_State,"Data Update Status",&
+             .true. , rc=status)
+        call LIS_verify(status)
+        
+        if(LIS_rc%obs_ngrid(k).gt.0) then 
+           call ESMF_AttributeSet(swefield,"Grid Number",&
+                gid,itemCount=LIS_rc%obs_ngrid(k),rc=status)
+           call LIS_verify(status)
+           
+           call ESMF_AttributeSet(swefield,"Assimilation Flag",&
+                assimflag,itemCount=LIS_rc%obs_ngrid(k),rc=status)
+           call LIS_verify(status)
+           
+        endif
+        if(MODIS_MLSWE_struc(n)%useSsdevScal.eq.1) then 
+
+           call ESMF_StateGet(OBS_Pert_State, "Observation01", pertfield, &
+                rc=status)
+           call LIS_verify(status, 'Error: StateGet Observation01')
+           
+           allocate(ssdev(LIS_rc%obs_ngrid(k)))
+           ssdev = MODIS_MLSWE_struc(n)%ssdev_inp
+
+           do r=1, LIS_rc%obs_lnr(k)
+              do c=1, LIS_rc%obs_lnc(k)
+                 gindex = LIS_obs_domain(n,k)%gindex(c,r)
+                 if(gindex.ne.-1.and.sweobs(c+(r-1)*LIS_rc%obs_lnc(k)).gt.0) then 
+                    ssdev(gindex) = ssdev(gindex)*&
+                         (1+sweunc(c+(r-1)*LIS_rc%obs_lnc(k))/&
+                         sweobs(c+(r-1)*LIS_rc%obs_lnc(k)))
+!                    temp(c,r) = ssdev(gindex)
+                 endif
+              enddo
+           enddo
+           
+           if (LIS_rc%obs_ngrid(k) .gt. 0) then
+              call ESMF_AttributeSet(pertField, "Standard Deviation", &
+                   ssdev, itemCount=LIS_rc%obs_ngrid(k), rc=status)
+              call LIS_verify(status)
+           endif
+        endif
+     else
+        call ESMF_AttributeSet(OBS_State,"Data Update Status",&
+             .false., rc=status)
+        call LIS_verify(status)     
+     endif
+  else
+     call ESMF_AttributeSet(OBS_State,"Data Update Status",&
+          .false., rc=status)
+     call LIS_verify(status)     
+  endif
+end subroutine read_MODIS_MLSWE
+
+!BOP
+! 
+! !ROUTINE: read_MODIS_ML_SWE_data
+! \label{read_MODIS_ML_SWE_data}
+!
+! !INTERFACE:
+subroutine read_MODIS_ML_SWE_data(n, k, fname, sweobs_ip,sweunc_ip)
+! 
+! !USES:   
+#if(defined USE_NETCDF3 || defined USE_NETCDF4)
+  use netcdf
+#endif
+  use LIS_coreMod
+  use LIS_logMod
+  use LIS_timeMgrMod
+  use MODIS_MLSWEMod, only : MODIS_MLSWE_struc
+
+  implicit none
+!
+! !INPUT PARAMETERS: 
+! 
+  integer                       :: n 
+  integer                       :: k
+  character (len=*)             :: fname
+  real                          :: sweobs_ip(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k))
+  real                          :: sweunc_ip(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k))
+  real*8                        :: cornerlat(2), cornerlon(2)
+  character*3                   :: fdoy
+
+! !OUTPUT PARAMETERS:
+!
+!
+! !DESCRIPTION: 
+!  This subroutine reads the MCD15A3H SWE file and applies the data
+!  quality flags to filter the data. 
+!
+!  The arguments are: 
+!  \begin{description}
+!  \item[n]            index of the nest
+!  \item[k]            number of observation state
+!  \item[k]            number of observation state
+!  \item[fname]        name of the MCD15A3H SWE file
+!  \item[climofile]    Generated MCD152AH SWE climatology file
+!  \item[sweobs\_ip]   MCD15A3H SWE data processed to the LIS domain
+!  \end{description}
+!
+!
+!EOP
+
+!--------------Wanshu -----------------------
+  integer,  parameter     :: nc=43200, nr=21600
+  integer                 :: lat_off, lon_off
+  integer                 :: swe(MODIS_MLSWE_struc(n)%nc,MODIS_MLSWE_struc(n)%nr)
+  real                    :: swe_unc(MODIS_MLSWE_struc(n)%nc,MODIS_MLSWE_struc(n)%nr)
+  real                    :: swe_flagged(MODIS_MLSWE_struc(n)%nc,MODIS_MLSWE_struc(n)%nr)
+  real                    :: swe_in(MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr)
+  real                    :: swe_unc_in(MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr)
+  logical*1               :: swe_data_b(MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr)
+  logical*1               :: sweobs_b_ip(LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k))
+  integer                 :: c,r,t
+  integer                 :: nid
+  integer                 :: sweid, sweuncid
+  integer                 :: ios
+  
+  integer, dimension(nf90_max_var_dims) :: dimIDs
+  integer                                :: numLons, numLats
+  character(8)           :: qc_str
+  integer                :: j, a  
+
+#if(defined USE_NETCDF3 || defined USE_NETCDF4)
+  ios = nf90_open(path=trim(fname),mode=NF90_NOWRITE,ncid=nid)
+  call LIS_verify(ios,'Error opening file '//trim(fname))
+  
+  ios = nf90_inq_varid(nid, 'SWE',sweid)
+  call LIS_verify(ios, 'Error nf90_inq_varid: SWE')
+  
+  ios = nf90_inq_varid(nid, 'SWE_uncertainty',sweuncid)
+  call LIS_verify(ios, 'Error nf90_inq_varid: SWE_uncertainty')
+
+  !values
+  
+  cornerlat(1)=MODIS_MLSWE_struc(n)%gridDesci(4)
+  cornerlon(1)=MODIS_MLSWE_struc(n)%gridDesci(5)
+  cornerlat(2)=MODIS_MLSWE_struc(n)%gridDesci(7)
+  cornerlon(2)=MODIS_MLSWE_struc(n)%gridDesci(8)
+  
+  swe_data_b = .false.
+  
+  lat_off = nint((cornerlat(1)+89.995833)/0.008333)+1
+  lon_off = nint((cornerlon(1)+179.9958333)/0.008333)+1
+
+  ios = nf90_get_var(nid, sweid, swe, &
+       start=(/lon_off,lat_off/), &
+       count=(/MODIS_MLSWE_struc(n)%nc,MODIS_MLSWE_struc(n)%nr/)) 
+  
+  call LIS_verify(ios, 'Error nf90_get_var: SWE')
+
+  
+  ios = nf90_get_var(nid, sweuncid, swe_unc, &
+       start=(/lon_off,lat_off/), &
+       count=(/MODIS_MLSWE_struc(n)%nc,MODIS_MLSWE_struc(n)%nr/))
+  
+  call LIS_verify(ios, 'Error nf90_get_var: SWE_uncertianty')
+  
+  ios = nf90_close(ncid=nid)
+  call LIS_verify(ios,'Error closing file '//trim(fname))
+  
+  do r=1, MODIS_MLSWE_struc(n)%nr
+     do c=1, MODIS_MLSWE_struc(n)%nc
+
+        if(swe(c,r).gt.0.and.swe(c,r).le.5000) then
+           swe_flagged(c,r) =&
+                real(swe(c,r))
+        else
+           swe_flagged(c,r) = LIS_rc%udef
+           swe_unc(c,r) = LIS_rc%udef
+        endif
+     end do
+  end do
+
+  
+  do r=1, MODIS_MLSWE_struc(n)%nr
+     do c=1, MODIS_MLSWE_struc(n)%nc
+        swe_in(c+(r-1)*MODIS_MLSWE_struc(n)%nc) = swe_flagged(c,r)
+        swe_unc_in(c+(r-1)*MODIS_MLSWE_struc(n)%nc) = swe_unc(c,r)
+
+        if(swe_flagged(c,r).ne.LIS_rc%udef) then
+           swe_data_b(c+(r-1)*MODIS_MLSWE_struc(n)%nc) = .true.
+        else
+           swe_data_b(c+(r-1)*MODIS_MLSWE_struc(n)%nc) = .false.
+        endif
+     enddo
+  enddo
+
+  if(LIS_rc%obs_gridDesc(k,10).le.0.008333) then 
+!--------------------------------------------------------------------------
+! Interpolate to the LIS running domain
+!-------------------------------------------------------------------------- 
+     call bilinear_interp(LIS_rc%obs_gridDesc(k,:),&
+          swe_data_b, swe_in, sweobs_b_ip, sweobs_ip, &
+          MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr, &
+          LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k), &
+          MODIS_MLSWE_struc(n)%rlat,MODIS_MLSWE_struc(n)%rlon,&
+          MODIS_MLSWE_struc(n)%w11,MODIS_MLSWE_struc(n)%w12,&
+          MODIS_MLSWE_struc(n)%w21,MODIS_MLSWE_struc(n)%w22,&
+          MODIS_MLSWE_struc(n)%n11,MODIS_MLSWE_struc(n)%n12,&
+          MODIS_MLSWE_struc(n)%n21,MODIS_MLSWE_struc(n)%n22,LIS_rc%udef,ios)
+     call bilinear_interp(LIS_rc%obs_gridDesc(k,:),&
+          swe_data_b, swe_unc_in, sweobs_b_ip, sweunc_ip, &
+          MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr, &
+          LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k), &
+          MODIS_MLSWE_struc(n)%rlat,MODIS_MLSWE_struc(n)%rlon,&
+          MODIS_MLSWE_struc(n)%w11,MODIS_MLSWE_struc(n)%w12,&
+          MODIS_MLSWE_struc(n)%w21,MODIS_MLSWE_struc(n)%w22,&
+          MODIS_MLSWE_struc(n)%n11,MODIS_MLSWE_struc(n)%n12,&
+          MODIS_MLSWE_struc(n)%n21,MODIS_MLSWE_struc(n)%n22,LIS_rc%udef,ios)     
+  else
+     call upscaleByAveraging(MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr,&
+          LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k), &
+          LIS_rc%udef, MODIS_MLSWE_struc(n)%n11,&
+          swe_data_b,swe_in, sweobs_b_ip, sweobs_ip)
+
+     call upscaleByAveraging(MODIS_MLSWE_struc(n)%nc*MODIS_MLSWE_struc(n)%nr,&
+          LIS_rc%obs_lnc(k)*LIS_rc%obs_lnr(k), &
+          LIS_rc%udef, MODIS_MLSWE_struc(n)%n11,&
+          swe_data_b,swe_unc_in, sweobs_b_ip, sweunc_ip)
+
+  endif
+  
+#endif
+
+end subroutine read_MODIS_ML_SWE_data
+
+!BOP
+! !ROUTINE: create_MODIS_MLSWE_filename
+! \label{create_MODIS_MLSWE_filename}
+! 
+! !INTERFACE: 
+subroutine create_MODIS_MLSWE_filename(ndir, yr, mo,da, filename)
+! !USES:   
+
+  implicit none
+! !ARGUMENTS: 
+  character(len=*)  :: filename
+  integer           :: yr, mo, da
+  character (len=*) :: ndir
+! 
+! !DESCRIPTION: 
+!  This subroutine creates the MODIS_MLSWE data filename
+! 
+!  The arguments are: 
+!  \begin{description}
+!  \item[ndir] name of the MODIS_MLSWE directory
+!  \item[yr]  current year
+!  \item[mo]  current month
+!  \item[da]  current day
+!  \item[filename] Generated MODIS_MLSWE filename
+! \end{description}
+!EOP
+
+  character (len=4) :: fyr
+  character (len=2) :: fmo,fda
+  
+  write(unit=fyr, fmt='(i4.4)') yr
+  write(unit=fmo, fmt='(i2.2)') mo
+  write(unit=fda, fmt='(i2.2)') da
+ 
+  filename = trim(ndir)//'/'//fyr//&
+       '/MODIS_SWE_ML_'//trim(fyr)//&
+       trim(fmo)//trim(fda)//'.nc4'
+  
+end subroutine create_MODIS_MLSWE_filename
+
+
